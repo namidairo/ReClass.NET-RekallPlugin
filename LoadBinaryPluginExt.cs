@@ -23,7 +23,10 @@ namespace LoadBinaryPlugin
 
 		private Dictionary<IntPtr, MemoryMappedFileInfo> openFiles;
 
-		public override Image Icon => Properties.Resources.icon;
+        private List<Tuple<Int64, Int64, Int64>> dumpIndex = new List<Tuple<Int64, Int64, Int64>>();
+
+
+        public override Image Icon => Properties.Resources.icon;
 
 		public override bool Initialize(IPluginHost host)
 		{
@@ -154,7 +157,13 @@ namespace LoadBinaryPlugin
 				{
 					try
 					{
-						using (var stream = info.File.CreateViewStream(address.ToInt64Bits(), size))
+                        Int64 fileaddress = 0;
+                        doTranslation(address, out fileaddress);
+                        if(fileaddress == 0)
+                        {
+                            return false;
+                        }
+						using (var stream = info.File.CreateViewStream(fileaddress, size))
 						{
 							stream.Read(buffer, 0, size);
 
@@ -212,6 +221,14 @@ namespace LoadBinaryPlugin
 						Name = Path.GetFileName(currentFile),
 						Path = currentFile
 					};
+
+                    // Parse index file into dictionary
+                    string IndexFilePath = Path.GetFullPath(currentFile);
+                    IndexFilePath += ".idx";
+
+                    Console.WriteLine(IndexFilePath);
+
+                    parseIndexFile(IndexFilePath);
 
 					callbackProcess(ref data);
 				}
@@ -287,5 +304,66 @@ namespace LoadBinaryPlugin
 
 			return false;
 		}
+
+        public bool doTranslation(IntPtr inputAddress, out Int64 outAddress)
+        {
+            foreach(Tuple<Int64,Int64,Int64> tuple in dumpIndex)
+            {
+                Int64 address = inputAddress.ToInt64();
+                Int64 virtualAddress = tuple.Item1;
+                Int64 fileAddress = tuple.Item2;
+                Int64 length = tuple.Item3;
+                // Check if address within range (virtual address, file address, length)
+                if(address >= virtualAddress && address <= (virtualAddress + length))
+                {
+                    outAddress = (address - virtualAddress) + fileAddress; // Input address - Virtual address
+                    return true;
+                }
+            }
+
+            outAddress = 0;
+            return false;
+        }
+
+        public bool parseIndexFile(string filePath)
+        {
+            if (!File.Exists(filePath))
+                return false;
+
+            using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+            {
+                using (StreamReader sr = new StreamReader(fs))
+                {
+                    while(!sr.EndOfStream)
+                    {
+                        parseIndexLine(sr.ReadLine());
+                    }
+                }
+            }
+                return true;
+        }
+
+        public bool parseIndexLine(string line)
+        {
+            // Ignore first couple lines of file or not containing addresses
+            if(!line.Contains("0x"))
+            {
+                return false;
+            }
+            // Read addresses in order File address -> Length -> Virtual address
+            char[] seperator = new char[] { ' ' };
+            string[] result;
+            result = line.Split(seperator, 3, StringSplitOptions.RemoveEmptyEntries);
+            // Add to dictionary
+
+            Int64 fileAddress = Convert.ToInt64(result[0], 16);
+            Int64 length = Convert.ToInt64(result[1], 16);
+            Int64 virtualAddress = Convert.ToInt64(result[2], 16);
+
+            var tuple = new Tuple<Int64, Int64, Int64>(virtualAddress, fileAddress, length);
+            dumpIndex.Add(tuple);
+
+            return true;
+        }
 	}
 }
